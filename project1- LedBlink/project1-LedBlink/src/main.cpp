@@ -1,18 +1,19 @@
+// main.cpp
 #include <Arduino.h>
+#include "LED.h" // Include your custom library
 
-// put function declarations here:
-int myFunction(int, int);
+LED myLED(2); // Create an instance of the LED class on pin 13
 
 void setup() {
-  // put your setup code here, to run once:
-  int result = myFunction(2, 3);
+    Serial.begin(9600); // Initialize serial communication
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-}
+    myLED.on();      // Turn on the LED
+    Serial.println("LED is ON");
+    delay(1000);     // Wait for 1 second
 
-// put function definitions here:
-int myFunction(int x, int y) {
-  return x + y;
+    myLED.off();     // Turn off the LED
+    Serial.println("LED is OFF");
+    delay(1000);     // Wait for 1 second
 }
