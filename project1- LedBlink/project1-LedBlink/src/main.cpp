@@ -6,6 +6,7 @@ LED myLED(2); // Create an instance of the LED class on pin 13
 
 void setup() {
     Serial.begin(9600); // Initialize serial communication
+    Serial.println("LED Blink Example");
 }
 
 void loop() {
