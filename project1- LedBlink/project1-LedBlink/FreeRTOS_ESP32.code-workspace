@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "../../../../../../PlatformIO/Projects/FreeRTOS_ESP32"
+		},
+		{
+			"name": "project1-LedBlink",
+			"path": "."
+		},
+		{
+			"name": "ESP32-Client",
+			"path": "../../ESP32-Client"
+		}
+	],
+	"settings": {}
+}
