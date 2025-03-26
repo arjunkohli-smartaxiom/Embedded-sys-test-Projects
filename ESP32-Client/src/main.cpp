@@ -3,8 +3,8 @@
 #include <ArduinoJson.h>
 
 // WiFi Credentials
-const char* ssid = "robozzlab";
-const char* password = "robozz123";
+const char* ssid = "SMARTAXIOM";
+const char* password = "Amit1305";
 
 // MQTT Broker Details
 const char* mqtt_server = "192.168.29.98"; // Update with your broker IP
@@ -18,6 +18,10 @@ PubSubClient client(espClient);
 
 // Device Details
 String device_id;
+
+// Timer for Ping Interval
+unsigned long lastPingTime = 0;
+const unsigned long pingInterval = 30000; // 30 seconds
 
 // LED & Shade Control Pins
 const int ledPins[] = {2, 4, 5, 18, 19, 21, 22, 23, 25, 26, 27, 32}; // GPIO pins for LEDs
@@ -117,6 +121,22 @@ void processShadeCommand(const JsonObject& command) {
     Serial.printf("❌ Invalid Shade address: %s\n", shadeAddr.c_str());
   }
 }
+// Function to Send Ping Message
+void sendPing() {
+  JsonDocument pingDoc; // Use JsonDocument instead of StaticJsonDocument or DynamicJsonDocument
+
+  pingDoc["device_id"] = device_id;
+  pingDoc["status"] = "online"; // You can add more fields if needed
+
+  String pingBuffer;
+  serializeJson(pingDoc, pingBuffer); // Serialize to a String
+
+  client.publish("MPS/global/sessionPing", pingBuffer.c_str()); // Publish ping message
+  Serial.println("📡 Sent Ping:");
+  Serial.println(pingBuffer);
+  delay(10);  // Add a small delay
+}
+
 
 // MQTT Callback Function to Handle Commands
 void callback(char* topic, byte* payload, unsigned int length) {
@@ -174,6 +194,13 @@ void loop() {
      connectToMQTT();
    }
    client.loop();
+
+   // Send Ping at Regular Intervals
+   unsigned long currentTime = millis();
+   if (currentTime - lastPingTime >= pingInterval) {
+     sendPing();
+     lastPingTime = currentTime;
+   }
 }
   /*
   The code is divided into several sections: 
