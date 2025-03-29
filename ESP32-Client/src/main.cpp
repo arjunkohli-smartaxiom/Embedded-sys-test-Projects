@@ -1,10 +1,7 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
-
-// WiFi Credentials
-const char* ssid = "SMARTAXIOM";
-const char* password = "Amit1305";
+#include "password.h"// Include your password.h file for WiFi credentials
 
 // MQTT Broker Details
 const char* mqtt_server = "192.168.29.98"; // Update with your broker IP
