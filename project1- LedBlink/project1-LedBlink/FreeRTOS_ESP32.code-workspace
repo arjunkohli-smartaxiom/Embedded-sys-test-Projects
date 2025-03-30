@@ -10,6 +10,10 @@
 		{
 			"name": "ESP32-Client",
 			"path": "../../ESP32-Client"
+		},
+		{
+			"name": "iot_device",
+			"path": "../../iot_device"
 		}
 	],
 	"settings": {}

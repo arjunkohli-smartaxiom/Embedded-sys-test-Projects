@@ -1,0 +1,70 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+
+// Config - CHANGE THESE!
+#define WIFI_SSID "robozzlab"
+#define WIFI_PASS "robozz123"
+#define MQTT_BROKER "192.168.29.98"  // Your local broker IP
+#define MQTT_PORT 1883               // Default MQTT port
+
+WiFiClient espClient;
+PubSubClient mqtt(espClient);
+const String deviceId = "IoT_Device_" + String((uint32_t)ESP.getEfuseMac(), HEX);
+
+void reconnect() {
+  while (!mqtt.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    if (mqtt.connect(deviceId.c_str())) {
+      Serial.println("connected");
+      mqtt.subscribe((deviceId + "/cmd").c_str());
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(mqtt.state());
+      Serial.println(" retrying in 5s");
+      delay(5000);
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(2, OUTPUT); // Built-in LED
+  
+  // 1. Connect WiFi
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi connected! IP: " + WiFi.localIP().toString());
+  Serial.println("Device ID: " + deviceId); 
+  // 2. Setup MQTT
+  mqtt.setServer(MQTT_BROKER, MQTT_PORT);
+  mqtt.setCallback([](char* topic, byte* payload, unsigned int length) {
+    Serial.print("Message arrived [");
+    Serial.print(topic);
+    Serial.print("]: ");
+    
+    String msg;
+    for (int i=0; i<length; i++) msg += (char)payload[i];
+    Serial.println(msg);
+    
+    if (msg == "ON") {
+      digitalWrite(2, HIGH);
+      mqtt.publish((deviceId + "/status").c_str(), "ON");
+    } else if (msg == "OFF") {
+      digitalWrite(2, LOW);
+      mqtt.publish((deviceId + "/status").c_str(), "OFF");
+    }
+  });
+}
+
+void loop() {
+  if (!mqtt.connected()) {
+    reconnect();
+  }
+  mqtt.loop();
+  delay(10);  // Add a small delay
+}
+ 
