@@ -25,19 +25,56 @@ const int ledPins[] = {2, 4, 5, 18, 19, 21, 22, 23, 25, 26, 27, 32}; // GPIO pin
 const int shadePins[] = {33, 34, 35, 36}; // GPIO pins for Shades
 
 // Function to Send Device Discovery Message
+// void sendDeviceDiscovery() {
+//   JsonDocument doc; // Use JsonDocument instead of StaticJsonDocument
+//   doc["device_id"] = device_id;
+//   doc["SNO"] = "234AM87695";
+//   doc["Firmware"] = "2.01";
+//   doc["MacAddr"] = WiFi.macAddress();
+
+//   char buffer[256];
+//   serializeJson(doc, buffer);
+//   client.publish("MPS/global/discovery", buffer, true);
+//   Serial.println("📢 Published Discovery Data:");
+//   Serial.println(buffer);
+// }
+
 void sendDeviceDiscovery() {
-  JsonDocument doc; // Use JsonDocument instead of StaticJsonDocument
+  JsonDocument doc; // Use JsonDocument for dynamic memory allocation
+
+  // Add basic device details (in sequence as per schema)
   doc["device_id"] = device_id;
   doc["SNO"] = "234AM87695";
   doc["Firmware"] = "2.01";
   doc["MacAddr"] = WiFi.macAddress();
 
-  char buffer[256];
+  // Add capabilities (example: an array of device entities)
+  JsonArray capabilities = doc.createNestedArray("capabilities");
+  
+  // Example capability: LED
+  JsonObject capability1 = capabilities.createNestedObject();
+  capability1["type"] = "LED";
+  capability1["channel"] = "LED1";
+  capability1["description"] = "Main LED Light";
+
+  // Example capability: SHADE
+  JsonObject capability2 = capabilities.createNestedObject();
+  capability2["type"] = "SHADE";
+  capability2["channel"] = "SHADE1";
+  capability2["description"] = "Motorized Shade";
+
+  // Add status field
+  doc["status"] = "online"; // Example status value
+
+  // Serialize and publish the JSON payload
+  String buffer;
   serializeJson(doc, buffer);
-  client.publish("MPS/global/discovery", buffer, true);
+  client.publish("MPS/global/discovery", buffer.c_str(), true); // Retain flag is true for discovery
   Serial.println("📢 Published Discovery Data:");
   Serial.println(buffer);
 }
+
+
 
 // Function to Connect to WiFi
 void connectToWiFi() {

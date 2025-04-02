@@ -14,7 +14,17 @@
 		{
 			"name": "iot_device",
 			"path": "../../iot_device"
+		},
+		{
+			"path": "../../iot-backend"
+		},
+		{
+			"path": "../../iot-frontend"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"files.associations": {
+			"testcode": "cpp"
+		}
+	}
 }
