@@ -1,77 +1,74 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Button, List, ListItem, Typography, Box } from '@mui/material';
+import { Button, TextField, Box, Typography } from '@mui/material';
 
-function App() {
-  const [devices, setDevices] = useState([]);
-  const [loading, setLoading] = useState(true);
+export default function App() {
+  const [email, setEmail] = useState('');
+  const [code, setCode] = useState('');
+  const [step, setStep] = useState(1); // 1=email, 2=code, 3=control
 
-  // Fetch devices
-  const fetchDevices = useCallback(async () => {
+  const handleActivate = async () => {
     try {
-      const res = await axios.get('http://localhost:3001/api/devices');
-      setDevices(res.data);
+      if (step === 1) {
+        // Step 1: Request activation code
+        await axios.post('http://localhost:3001/api/activate/request', { 
+          email 
+        });
+        setStep(2);
+      } else {
+        // Step 2: Verify code
+        const { data } = await axios.post('http://localhost:3001/api/activate/verify', { 
+          email, 
+          code 
+        });
+        if (data.success) setStep(3);
+      }
     } catch (err) {
-      console.error("Fetch error:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Control device
-  const controlDevice = async (deviceId, command) => {
-    try {
-      await axios.post('http://localhost:3001/api/control', {
-        deviceId,
-        command
-      });
-      fetchDevices(); // Refresh state immediately
-    } catch (err) {
-      console.error("Control error:", err);
+      console.error("Activation error:", err.response?.data || err.message);
+      alert(`Activation failed: ${err.response?.data?.error || err.message}`);
     }
   };
 
-  // Initial load + polling
-  useEffect(() => {
-    fetchDevices();
-    const interval = setInterval(fetchDevices, 1000);
-    return () => clearInterval(interval);
-  }, [fetchDevices]);
+  const controlDevice = (command) => {
+    axios.post('http://localhost:3001/api/control', {
+      deviceId: '2265b7a0', // Replace with dynamic value
+      command
+    });
+  };
 
   return (
-    <Box sx={{ maxWidth: 600, mx: 'auto', p: 3 }}>
-      <Typography variant="h6" gutterBottom>
-        Device Control
-      </Typography>
-
-      {loading ? (
-        <Typography>Loading...</Typography>
+    <Box sx={{ maxWidth: 400, mx: 'auto', p: 3 }}>
+      {step === 1 ? (
+        <>
+          <TextField 
+            label="Email" 
+            fullWidth 
+            value={email} 
+            onChange={(e) => setEmail(e.target.value)} 
+          />
+          <Button onClick={handleActivate} variant="contained">
+            Send Code
+          </Button>
+        </>
+      ) : step === 2 ? (
+        <>
+          <TextField 
+            label="Activation Code" 
+            fullWidth 
+            value={code} 
+            onChange={(e) => setCode(e.target.value)} 
+          />
+          <Button onClick={handleActivate} variant="contained">
+            Activate
+          </Button>
+        </>
       ) : (
-        <List>
-          {devices.map(device => (
-            <ListItem key={device.id}>
-              <Typography sx={{ width: 150 }}>
-                {device.name}: {device.status}
-              </Typography>
-              <Button 
-                variant="contained" 
-                sx={{ mx: 1 }}
-                onClick={() => controlDevice(device.id, 'ON')}
-              >
-                ON
-              </Button>
-              <Button 
-                variant="outlined"
-                onClick={() => controlDevice(device.id, 'OFF')}
-              >
-                OFF
-              </Button>
-            </ListItem>
-          ))}
-        </List>
+        <>
+          <Typography>Device Control</Typography>
+          <Button onClick={() => controlDevice('ON')}>Turn ON</Button>
+          <Button onClick={() => controlDevice('OFF')}>Turn OFF</Button>
+        </>
       )}
     </Box>
   );
 }
-
-export default App;
