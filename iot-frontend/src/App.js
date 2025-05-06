@@ -31,7 +31,7 @@ export default function App() {
 
   const controlDevice = (command) => {
     axios.post('http://localhost:3001/api/control', {
-      deviceId: '2265b7a0', // Replace with dynamic value
+      deviceId: 'e438bcd8', // Replace with dynamic value
       command
     });
   };
