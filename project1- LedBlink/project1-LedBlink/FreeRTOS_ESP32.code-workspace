@@ -23,6 +23,7 @@
 		"files.associations": {
 			"testcode": "cpp",
 			"code1": "cpp"
-		}
+		},
+		"stm32-for-vscode.openOCDPath": false
 	}
 }
