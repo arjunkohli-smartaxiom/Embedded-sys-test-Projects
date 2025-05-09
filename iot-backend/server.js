@@ -100,49 +100,99 @@ app.post('/api/activate/request', (req, res) => {
 });
 
 // Verify Activation Code and Register Username/Password
+// app.post('/api/activate/verify', async (req, res) => {
+//   const { email, code, username, password } = req.body;
+//   const record = pendingActivations.get(email);
+//   console.log("Pending activation record:", record);
+//   console.log("Activation verify called with:", req.body);
+//   console.log("Pending activation record:", record);
+
+//   if (!record || record.code !== code) {
+//     return res.status(400).json({ error: 'Invalid code' });
+//   }
+
+//   if (await User.findOne({ username })) {
+//     return res.status(400).json({ error: 'Username already taken' });
+//   }
+
+//   const hashed = await bcrypt.hash(password, 10);
+
+//   let user = await User.findOne({ email });
+//   if (!user) {
+//     user = new User({
+//       email,
+//       username,
+//       password: hashed,
+//       devices: [{ deviceId: record.deviceId, activatedAt: new Date() }]
+//     });
+//     console.log("Creating new user with device:", record.deviceId);
+//   } else {
+//     user.username = username;
+//     user.password = hashed;
+//     // Only add device if not already present
+//     if (!user.devices.some(d => d.deviceId === record.deviceId)) {
+//       user.devices.push({ deviceId: record.deviceId, activatedAt: new Date() });
+//       console.log("Adding device to existing user:", record.deviceId);
+//     } else {
+//       console.log("Device already present for user:", record.deviceId);
+//     }
+//   }
+//   await user.save();
+//   pendingActivations.delete(email);
+
+//   // Issue JWT token for session
+//   const token = jwt.sign({ username: user.username, email: user.email }, SECRET, { expiresIn: '30d' });
+//   res.json({ success: true, token, devices: user.devices });
+// });
 app.post('/api/activate/verify', async (req, res) => {
   const { email, code, username, password } = req.body;
   const record = pendingActivations.get(email);
-  console.log("Pending activation record:", record);
-  console.log("Activation verify called with:", req.body);
-  console.log("Pending activation record:", record);
 
   if (!record || record.code !== code) {
     return res.status(400).json({ error: 'Invalid code' });
   }
 
-  if (await User.findOne({ username })) {
-    return res.status(400).json({ error: 'Username already taken' });
-  }
-
-  const hashed = await bcrypt.hash(password, 10);
-
   let user = await User.findOne({ email });
-  if (!user) {
+  if (user) {
+    // User exists: authenticate
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password required for existing user' });
+    }
+    if (user.username !== username) {
+      return res.status(400).json({ error: 'Username does not match registered email' });
+    }
+    const valid = await bcrypt.compare(password, user.password);
+    if (!valid) {
+      return res.status(400).json({ error: 'Invalid password' });
+    }
+    // Add device if not already present
+    if (!user.devices.some(d => d.deviceId === record.deviceId)) {
+      user.devices.push({ deviceId: record.deviceId, activatedAt: new Date() });
+      await user.save();
+    }
+    pendingActivations.delete(email);
+    const token = jwt.sign({ username: user.username, email: user.email }, SECRET, { expiresIn: '30d' });
+    return res.json({ success: true, token, devices: user.devices });
+  } else {
+    // New user: create
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password required for new user' });
+    }
+    if (await User.findOne({ username })) {
+      return res.status(400).json({ error: 'Username already taken' });
+    }
+    const hashed = await bcrypt.hash(password, 10);
     user = new User({
       email,
       username,
       password: hashed,
       devices: [{ deviceId: record.deviceId, activatedAt: new Date() }]
     });
-    console.log("Creating new user with device:", record.deviceId);
-  } else {
-    user.username = username;
-    user.password = hashed;
-    // Only add device if not already present
-    if (!user.devices.some(d => d.deviceId === record.deviceId)) {
-      user.devices.push({ deviceId: record.deviceId, activatedAt: new Date() });
-      console.log("Adding device to existing user:", record.deviceId);
-    } else {
-      console.log("Device already present for user:", record.deviceId);
-    }
+    await user.save();
+    pendingActivations.delete(email);
+    const token = jwt.sign({ username: user.username, email: user.email }, SECRET, { expiresIn: '30d' });
+    return res.json({ success: true, token, devices: user.devices });
   }
-  await user.save();
-  pendingActivations.delete(email);
-
-  // Issue JWT token for session
-  const token = jwt.sign({ username: user.username, email: user.email }, SECRET, { expiresIn: '30d' });
-  res.json({ success: true, token, devices: user.devices });
 });
 
 // Login with Username/Password
@@ -153,7 +203,7 @@ app.post('/api/login', async (req, res) => {
   const valid = await bcrypt.compare(password, user.password);
   if (!valid) return res.status(400).json({ error: 'Invalid credentials' });
   const token = jwt.sign({ username: user.username, email: user.email }, SECRET, { expiresIn: '30d' });
-  res.json({ token, devices: user.devices });
+  res.json({ token, devices: user.devices, username: user.username });
 });
 
 // Get Devices (for logged-in user)

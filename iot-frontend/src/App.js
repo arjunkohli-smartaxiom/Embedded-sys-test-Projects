@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Button, TextField, Box, Typography, Select, MenuItem } from '@mui/material';
 
+
 export default function App() {
   const [step, setStep] = useState(1);
   const [email, setEmail] = useState('');
@@ -11,7 +12,7 @@ export default function App() {
   const [token, setToken] = useState(localStorage.getItem('iot-token') || '');
   const [devices, setDevices] = useState([]);
   const [selectedDevice, setSelectedDevice] = useState('');
-
+  const [loggedInUsername, setLoggedInUsername] = useState(localStorage.getItem('iot-username') || '');
   // Auto-login if token exists
   useEffect(() => {
     if (token) {
@@ -49,8 +50,10 @@ export default function App() {
       });
       if (data.success) {
         localStorage.setItem('iot-token', data.token);
+        localStorage.setItem('iot-username', data.username); // Save username
         setToken(data.token);
         setDevices(data.devices);
+        setLoggedInUsername(data.username); // Set username in state
         setStep(3);
       }
     } catch (err) {
@@ -63,8 +66,10 @@ export default function App() {
     try {
       const { data } = await axios.post('http://localhost:3001/api/login', { username, password });
       localStorage.setItem('iot-token', data.token);
+      localStorage.setItem('iot-username', data.username); // Save username
       setToken(data.token);
       setDevices(data.devices);
+      setLoggedInUsername(data.username); // Set username in state
       setStep(3);
     } catch (err) {
       alert(err.response?.data?.error || 'Login failed');
@@ -99,7 +104,7 @@ export default function App() {
           </Button>
         </>
       )}
-  
+
       {/* Enter Activation Code */}
       {step === 2 && (
         <>
@@ -115,7 +120,7 @@ export default function App() {
           </Button>
         </>
       )}
-  
+
       {/* Set Username/Password */}
       {step === 4 && (
         <>
@@ -139,7 +144,7 @@ export default function App() {
           </Button>
         </>
       )}
-  
+
       {/* Login */}
       {step === 5 && (
         <>
@@ -164,12 +169,17 @@ export default function App() {
           </Button>
         </>
       )}
-  
+
       {/* Device Control with Logout */}
       {step === 3 && (
         <>
           <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
             <Typography variant="h6" gutterBottom>
+              {loggedInUsername && (
+                <Typography variant="subtitle1" color="primary" sx={{ mb: 1 }}>
+                  User: {loggedInUsername}
+                </Typography>
+              )}
               Device Control
             </Typography>
             <Button
@@ -184,11 +194,18 @@ export default function App() {
                 setPassword('');
                 setDevices([]);
                 setSelectedDevice('');
+                setLoggedInUsername(''); // Clear username
+
               }}
             >
               Logout
             </Button>
           </Box>
+          {/* {loggedInUsername && (
+            <Typography variant="subtitle1" color="primary" sx={{ mb: 1 }}>
+              User: {loggedInUsername}
+            </Typography>
+          )} */}
           <Select
             fullWidth
             value={selectedDevice}
@@ -222,5 +239,5 @@ export default function App() {
       )}
     </Box>
   );
-  
+
 }
