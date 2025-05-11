@@ -31,9 +31,14 @@ app.use(cors());
 app.use(express.json());
 
 // MQTT Setup
-const mqttClient = mqtt.connect('mqtt://192.168.29.98', {
-  username: 'mps-bam100',
-  password: 'bam100'
+// const mqttClient = mqtt.connect('mqtt://192.168.29.98', {
+//   username: 'mps-bam100',
+//   password: 'bam100'
+// });
+
+const mqttClient = mqtt.connect('mqtt://gull.rmq.cloudamqp.com', {
+  username: 'ejumsfuq:ejumsfuq',
+  password: '23apT7-ha1RDMnhhjNOSPUYlCcXZeURj'
 });
 
 // Nodemailer Setup

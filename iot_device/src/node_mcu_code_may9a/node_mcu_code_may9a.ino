@@ -4,10 +4,15 @@
 #include <EEPROM.h>
 
 // MQTT Config
-const char* MQTT_BROKER = "192.168.29.98";
+// const char* MQTT_BROKER = "192.168.29.98";  // 236.190
+// const int MQTT_PORT = 1883;
+// const char* MQTT_USER = "mps-bam100";
+// const char* MQTT_PASS = "bam100";
+
+const char* MQTT_BROKER = "gull.rmq.cloudamqp.com";  // 236.190
 const int MQTT_PORT = 1883;
-const char* MQTT_USER = "mps-bam100";
-const char* MQTT_PASS = "bam100";
+const char* MQTT_USER = "ejumsfuq:ejumsfuq";
+const char* MQTT_PASS = "23apT7-ha1RDMnhhjNOSPUYlCcXZeURj";
 
 // Device Info
 const String DEVICE_ID = "IoT_Device_" + String(ESP.getChipId(), HEX);
