@@ -52,10 +52,11 @@ struct PIRSensor {
   unsigned long last_motion_time;
   unsigned long timer_start;
   bool timer_active;
+  bool first_motion_sent;  // Track if first motion MQTT was sent
 };
 
 // Default sensor configuration (can be changed via serial commands)
-PIRSensor pirSensor = {1, 1, false, false, 0, 0, false}; // ID=1, Port=1/2
+PIRSensor pirSensor = {2, 1, false, false, 0, 0, false, false}; // ID=2, Port=1, first_motion_sent=false
 
 // Use ESP32 Hardware Serial (Serial2) with original pins
 HardwareSerial RS485Serial(2); // RX=16, TX=17
@@ -69,6 +70,7 @@ const unsigned long motionDebounceTime = 1000; // 1 second debounce
 
 // Dynamic timer configuration
 unsigned long SENSE_TIMEOUT = 30 * 1000; // 30 seconds for testing (change to 15 * 60 * 1000 for 15 minutes)
+unsigned long MOTION_CHECK_INTERVAL = 60 * 1000; // 1 minute interval to check motion after motion detected
 
 // Timer for Ping Interval
 unsigned long lastPingTime = 0;
@@ -165,6 +167,7 @@ void sendPIRStatusUpdate(String status);
 void sendSenseTimeoutMessage();
 void handlePIRConfig(String input);
 void showPIRConfig();
+uint8_t autoDetectPIRID();
 
 // Serial Configuration Functions
 void showConfigMenu() {
@@ -229,7 +232,9 @@ void showPIRConfig() {
   Serial.println("   Port Address: Port-" + String(pirSensor.port) + "_" + String(pirSensor.sensor_id));
   Serial.println("   Motion Status: " + String(pirSensor.motion_detected ? "DETECTED" : "NO MOTION"));
   Serial.println("   Timer Active: " + String(pirSensor.timer_active ? "YES" : "NO"));
+  Serial.println("   First Motion Sent: " + String(pirSensor.first_motion_sent ? "YES" : "NO"));
   Serial.println("   Timeout: " + String(SENSE_TIMEOUT / 1000) + " seconds");
+  Serial.println("   Motion Check Interval: " + String(MOTION_CHECK_INTERVAL / 1000) + " seconds");
   Serial.println("   DE Pin: " + String(PIR_DE_PIN));
   Serial.println("   RX Pin: " + String(PIR_RX_PIN));
   Serial.println("   TX Pin: " + String(PIR_TX_PIN));
@@ -239,6 +244,8 @@ void showPIRConfig() {
   Serial.println("   'pirid X' - Set sensor ID to X");
   Serial.println("   'pirport X' - Set port to X");
   Serial.println("   'pirtimer X' - Set timeout to X seconds");
+  Serial.println("   'pirinterval X' - Set motion check interval to X seconds");
+  Serial.println("   'pirscan' - Auto-detect PIR sensor ID");
 }
 
 void handleSerialInput() {
@@ -303,12 +310,28 @@ void handleSerialInput() {
         Serial.println("❌ Invalid Timer! Use 5-3600 seconds");
       }
     }
+    else if (command.startsWith("pirinterval ")) {
+      int newInterval = command.substring(12).toInt();
+      if (newInterval >= 1 && newInterval <= 300) {
+        MOTION_CHECK_INTERVAL = newInterval * 1000;
+        Serial.println("✅ PIR Motion Check Interval set to: " + String(newInterval) + " seconds");
+      } else {
+        Serial.println("❌ Invalid Interval! Use 1-300 seconds");
+      }
+    }
+    else if (command == "pirscan") {
+      Serial.println("🔍 Scanning for PIR sensors...");
+      uint8_t detectedID = autoDetectPIRID();
+      pirSensor.sensor_id = detectedID;
+      node.begin(pirSensor.sensor_id, RS485Serial);
+      Serial.println("✅ PIR sensor updated with detected ID: " + String(detectedID));
+    }
     else if (configMode) {
       handleConfigInput(input);
     }
     else {
       Serial.println("\nUnknown command. Try: config, show, skip, clear, pirconfig, pirstatus");
-      Serial.println("PIR Commands: pirid X, pirport X, pirtimer X");
+      Serial.println("PIR Commands: pirid X, pirport X, pirtimer X, pirinterval X, pirscan");
     }
   }
 }
@@ -491,6 +514,15 @@ void sendStatusUpdate(String channel, String status) {
 // PIR Sensor Functions
 void initPIRSensor() {
   Serial.println("🔍 Initializing PIR Sensor...");
+  
+  pinMode(PIR_DE_PIN, OUTPUT);
+  digitalWrite(PIR_DE_PIN, LOW);
+  
+  RS485Serial.begin(9600, SERIAL_8N1, PIR_RX_PIN, PIR_TX_PIN);
+  
+  // Auto-detect PIR sensor ID
+  pirSensor.sensor_id = autoDetectPIRID();
+  
   Serial.println("   PIR ID: " + String(pirSensor.sensor_id));
   Serial.println("   Port: " + String(pirSensor.port));
   Serial.println("   Port Address: Port-" + String(pirSensor.port) + "_" + String(pirSensor.sensor_id));
@@ -498,14 +530,9 @@ void initPIRSensor() {
   Serial.println("   RX Pin: " + String(PIR_RX_PIN));
   Serial.println("   TX Pin: " + String(PIR_TX_PIN));
   
-  pinMode(PIR_DE_PIN, OUTPUT);
-  digitalWrite(PIR_DE_PIN, LOW);
-  
-  RS485Serial.begin(9600, SERIAL_8N1, PIR_RX_PIN, PIR_TX_PIN);
-  
   node.begin(pirSensor.sensor_id, RS485Serial);
-    node.preTransmission(preTransmission);
-    node.postTransmission(postTransmission);
+  node.preTransmission(preTransmission);
+  node.postTransmission(postTransmission);
     
   Serial.println("✅ PIR Sensor initialized");
   
@@ -553,19 +580,7 @@ void sendSenseTimeoutMessage() {
   }
 }
 
-// Timer callback after timeout (like actual device)
-void pir_motion_timer_callback() {
-  if (pirSensor.motion_detected == 1) {
-    pirSensor.motion_detected = 0;  // Reset motion
-    pirSensor.last_send_status = 0; // Reset status
-    
-    // Send "no motion" message (this turns OFF the light!)
-    sendPIRStatusUpdate("no_motion");
-    pirSensor.timer_active = false;
-    
-    Serial.println("⏰ Timer Callback: Motion reset, sending no motion status");
-  }
-}
+// Timer callback function removed - we now only send MQTT when actual motion stops
 
 void checkPIRMotion() {
     uint8_t result = node.readHoldingRegisters(0x0006, 1);
@@ -574,6 +589,7 @@ void checkPIRMotion() {
         uint16_t status = node.getResponseBuffer(0);
         bool newMotionState = (status == 0x0001);
         
+        // Always show motion status on serial for debugging
         if (newMotionState != lastMotionState && (millis() - lastMotionTime > motionDebounceTime)) {
             motionDetected = newMotionState;
             lastMotionState = newMotionState;
@@ -583,19 +599,53 @@ void checkPIRMotion() {
                 Serial.println("🔴 PIR MOTION DETECTED!");
                 pirSensor.motion_detected = 1;
                 pirSensor.last_motion_time = millis();
-                pirSensor.timer_start = millis();
-                pirSensor.timer_active = true;
-                sendPIRStatusUpdate("motion_detected");
+                
+                // Check if this is first motion or during timer period
+                if (!pirSensor.first_motion_sent) {
+                    // FIRST MOTION: Send MQTT immediately to turn ON lights
+                    Serial.println("📤 FIRST MOTION - Sending MQTT config to turn ON lights");
+                    sendPIRStatusUpdate("motion_detected");
+                    pirSensor.first_motion_sent = true;
+                    pirSensor.timer_start = millis();
+                    pirSensor.timer_active = true;
+                    Serial.println("⏰ Timer started - subsequent motion will show on serial only");
+                } else {
+                    // SUBSEQUENT MOTION: Only show on serial, NO MQTT
+                    Serial.println("⏳ Motion during timer period - Serial only (NO MQTT)");
+                }
             } else {
                 Serial.println("🟢 PIR NO MOTION");
-                sendPIRStatusUpdate("no_motion");
+                
+                // Only send MQTT if timer is not active (timer expired or no motion before timer started)
+                if (!pirSensor.timer_active) {
+                    Serial.println("📤 Sending no motion MQTT to turn OFF lights");
+                    sendPIRStatusUpdate("no_motion");
+                    // Reset for next cycle only when timer is not active
+                    pirSensor.first_motion_sent = false;
+                } else {
+                    Serial.println("⏳ No motion detected but timer still active - showing on serial only");
+                    // Don't reset flags when timer is still active
+                }
             }
         }
         
-        // Check for timer timeout (like actual device)
-        if (pirSensor.timer_active && pirSensor.motion_detected == 1 && (millis() - pirSensor.timer_start > SENSE_TIMEOUT)) {
-            Serial.println("⏰ Timer timeout - Calling timer callback");
-            pir_motion_timer_callback();
+        // Check timer timeout - send no motion MQTT when timer expires
+        if (pirSensor.timer_active && (millis() - pirSensor.timer_start > SENSE_TIMEOUT)) {
+            Serial.println("⏰ Timer expired - sending no motion MQTT to turn OFF lights");
+            Serial.println("   Timer was active for: " + String((millis() - pirSensor.timer_start) / 1000) + " seconds");
+            sendPIRStatusUpdate("no_motion");
+            pirSensor.motion_detected = 0;
+            pirSensor.first_motion_sent = false;
+            pirSensor.timer_active = false;
+        }
+        
+        // Debug timer status
+        if (pirSensor.timer_active) {
+            unsigned long elapsed = (millis() - pirSensor.timer_start) / 1000;
+            unsigned long remaining = (SENSE_TIMEOUT / 1000) - elapsed;
+            if (elapsed % 5 == 0) { // Print every 5 seconds
+                Serial.println("⏱️ Timer status: " + String(elapsed) + "s elapsed, " + String(remaining) + "s remaining");
+            }
         }
         
     } else {
@@ -610,6 +660,42 @@ void preTransmission() {
 
 void postTransmission() {
   digitalWrite(PIR_DE_PIN, LOW);
+}
+
+// Auto-detect PIR sensor ID by scanning common IDs
+uint8_t autoDetectPIRID() {
+  Serial.println("🔍 Auto-detecting PIR sensor ID...");
+  
+  // Common PIR sensor IDs to try
+  uint8_t commonIDs[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+  uint8_t numIDs = sizeof(commonIDs) / sizeof(commonIDs[0]);
+  
+  for (int i = 0; i < numIDs; i++) {
+    uint8_t testID = commonIDs[i];
+    Serial.print("   Testing ID " + String(testID) + "... ");
+    
+    // Create temporary node for testing
+    ModbusMaster testNode;
+    testNode.begin(testID, RS485Serial);
+    testNode.preTransmission(preTransmission);
+    testNode.postTransmission(postTransmission);
+    
+    // Try to read a register
+    uint8_t result = testNode.readHoldingRegisters(0x0006, 1);
+    
+    if (result == testNode.ku8MBSuccess) {
+      Serial.println("✅ Found!");
+      Serial.println("🎯 Auto-detected PIR Sensor ID: " + String(testID));
+      return testID;
+    } else {
+      Serial.println("❌ No response");
+    }
+    
+    delay(100); // Small delay between tests
+  }
+  
+  Serial.println("⚠️ No PIR sensor detected, using default ID: 2");
+  return 2; // Default fallback
 }
 
 void processLEDCommand(const JsonObject& command) {
@@ -873,9 +959,9 @@ void loop() {
   }
   client.loop();
 
-  // Check PIR sensor motion every 1 second
+  // Check PIR sensor motion continuously (every 1 second for responsiveness)
   static uint32_t pirTimer = millis();
-  if (millis() - pirTimer > 1000) {
+  if (millis() - pirTimer > 1000) {  // Check every 1 second
     pirTimer = millis();
     checkPIRMotion();
   }

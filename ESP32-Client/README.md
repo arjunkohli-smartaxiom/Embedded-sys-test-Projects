@@ -309,3 +309,4 @@ For issues and questions:
 ---
 
 **Note**: This project is designed for IoT applications requiring reliable PIR motion detection with MQTT integration. The dynamic configuration system allows for easy adaptation to different sensor setups and network requirements.
+
