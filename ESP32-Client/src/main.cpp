@@ -7,11 +7,14 @@
 #include "password.h"
 
 // EEPROM Configuration
-#define EEPROM_SIZE 512
+#define EEPROM_SIZE 1024
 #define SSID_ADDR 0
 #define PASSWORD_ADDR 64
 #define MQTT_SERVER_ADDR 128
 #define CONFIG_FLAG_ADDR 192
+#define TIMER_VALUE_ADDR 256
+#define SENSOR_TIMER_BASE_ADDR 320  // Base address for sensor timers (4 bytes per sensor)
+#define MAX_SENSORS 10  // Maximum number of sensors supported
 
 // Default MQTT Broker Details
 const char* default_mqtt_server = "35.200.133.222";  
@@ -53,10 +56,11 @@ struct PIRSensor {
   unsigned long timer_start;
   bool timer_active;
   bool first_motion_sent;  // Track if first motion MQTT was sent
+  unsigned long sense_timeout;  // Individual timer for each sensor
 };
 
 // Default sensor configuration (can be changed via serial commands)
-PIRSensor pirSensor = {2, 1, false, false, 0, 0, false, false}; // ID=2, Port=1, first_motion_sent=false
+PIRSensor pirSensor = {2, 1, false, false, 0, 0, false, false, 30 * 1000}; // ID=2, Port=1, first_motion_sent=false, 30s timer
 
 // Use ESP32 Hardware Serial (Serial2) with original pins
 HardwareSerial RS485Serial(2); // RX=16, TX=17
@@ -69,7 +73,7 @@ unsigned long lastMotionTime = 0;
 const unsigned long motionDebounceTime = 1000; // 1 second debounce
 
 // Dynamic timer configuration
-unsigned long SENSE_TIMEOUT = 30 * 1000; // 30 seconds for testing (change to 15 * 60 * 1000 for 15 minutes)
+unsigned long SENSE_TIMEOUT = 30 * 1000; // Will be loaded from EEPROM
 unsigned long MOTION_CHECK_INTERVAL = 60 * 1000; // 1 minute interval to check motion after motion detected
 
 // Timer for Ping Interval
@@ -158,6 +162,79 @@ void clearCredentials() {
   Serial.println("🗑️ Credentials cleared from EEPROM");
 }
 
+void saveTimerValue(unsigned long timerValue) {
+  // Save timer value to EEPROM (4 bytes)
+  EEPROM.write(TIMER_VALUE_ADDR, (timerValue >> 24) & 0xFF);
+  EEPROM.write(TIMER_VALUE_ADDR + 1, (timerValue >> 16) & 0xFF);
+  EEPROM.write(TIMER_VALUE_ADDR + 2, (timerValue >> 8) & 0xFF);
+  EEPROM.write(TIMER_VALUE_ADDR + 3, timerValue & 0xFF);
+  EEPROM.commit();
+  Serial.println("✅ Timer value saved to EEPROM: " + String(timerValue / 1000) + " seconds");
+}
+
+unsigned long loadTimerValue() {
+  // Load timer value from EEPROM
+  unsigned long timerValue = 0;
+  timerValue |= ((unsigned long)EEPROM.read(TIMER_VALUE_ADDR) << 24);
+  timerValue |= ((unsigned long)EEPROM.read(TIMER_VALUE_ADDR + 1) << 16);
+  timerValue |= ((unsigned long)EEPROM.read(TIMER_VALUE_ADDR + 2) << 8);
+  timerValue |= (unsigned long)EEPROM.read(TIMER_VALUE_ADDR + 3);
+  
+  // If no saved value, use default
+  if (timerValue == 0 || timerValue > 3600000) { // Max 1 hour
+    timerValue = 30 * 1000; // Default 30 seconds
+  }
+  
+  Serial.println("📋 Loaded timer value: " + String(timerValue / 1000) + " seconds");
+  return timerValue;
+}
+
+void saveSensorTimer(uint8_t sensor_id, uint8_t port, unsigned long timerValue) {
+  // Calculate address for this sensor (sensor_id * 10 + port)
+  int sensor_index = sensor_id * 10 + port;
+  if (sensor_index >= MAX_SENSORS) {
+    Serial.println("❌ Sensor index out of range");
+    return;
+  }
+  
+  int addr = SENSOR_TIMER_BASE_ADDR + (sensor_index * 4);
+  
+  // Save timer value to EEPROM (4 bytes)
+  EEPROM.write(addr, (timerValue >> 24) & 0xFF);
+  EEPROM.write(addr + 1, (timerValue >> 16) & 0xFF);
+  EEPROM.write(addr + 2, (timerValue >> 8) & 0xFF);
+  EEPROM.write(addr + 3, timerValue & 0xFF);
+  EEPROM.commit();
+  
+  Serial.println("✅ Sensor timer saved - ID:" + String(sensor_id) + " Port:" + String(port) + " Timer:" + String(timerValue / 1000) + "s");
+}
+
+unsigned long loadSensorTimer(uint8_t sensor_id, uint8_t port) {
+  // Calculate address for this sensor
+  int sensor_index = sensor_id * 10 + port;
+  if (sensor_index >= MAX_SENSORS) {
+    Serial.println("❌ Sensor index out of range");
+    return 30 * 1000; // Default 30 seconds
+  }
+  
+  int addr = SENSOR_TIMER_BASE_ADDR + (sensor_index * 4);
+  
+  // Load timer value from EEPROM
+  unsigned long timerValue = 0;
+  timerValue |= ((unsigned long)EEPROM.read(addr) << 24);
+  timerValue |= ((unsigned long)EEPROM.read(addr + 1) << 16);
+  timerValue |= ((unsigned long)EEPROM.read(addr + 2) << 8);
+  timerValue |= (unsigned long)EEPROM.read(addr + 3);
+  
+  // If no saved value, use default
+  if (timerValue == 0 || timerValue > 3600000) { // Max 1 hour
+    timerValue = 30 * 1000; // Default 30 seconds
+  }
+  
+  Serial.println("📋 Loaded sensor timer - ID:" + String(sensor_id) + " Port:" + String(port) + " Timer:" + String(timerValue / 1000) + "s");
+  return timerValue;
+}
+
 // Forward declaration
 void handleConfigInput(String input);
 void showCurrentConfig();
@@ -168,6 +245,7 @@ void sendSenseTimeoutMessage();
 void handlePIRConfig(String input);
 void showPIRConfig();
 uint8_t autoDetectPIRID();
+void handleTimerCommand(const JsonDocument& doc);
 
 // Serial Configuration Functions
 void showConfigMenu() {
@@ -235,6 +313,9 @@ void showPIRConfig() {
   Serial.println("   First Motion Sent: " + String(pirSensor.first_motion_sent ? "YES" : "NO"));
   Serial.println("   Timeout: " + String(SENSE_TIMEOUT / 1000) + " seconds");
   Serial.println("   Motion Check Interval: " + String(MOTION_CHECK_INTERVAL / 1000) + " seconds");
+  Serial.println("\n📝 Timer Commands:");
+  Serial.println("   'pirtimer X' - Set timeout to X seconds (5-3600)");
+  Serial.println("   'timerstatus' - Show current timer value");
   Serial.println("   DE Pin: " + String(PIR_DE_PIN));
   Serial.println("   RX Pin: " + String(PIR_RX_PIN));
   Serial.println("   TX Pin: " + String(PIR_TX_PIN));
@@ -325,6 +406,12 @@ void handleSerialInput() {
       pirSensor.sensor_id = detectedID;
       node.begin(pirSensor.sensor_id, RS485Serial);
       Serial.println("✅ PIR sensor updated with detected ID: " + String(detectedID));
+    }
+    else if (command == "timerstatus") {
+      Serial.println("⏰ Current Timer Configuration:");
+      Serial.println("   Timer Value: " + String(SENSE_TIMEOUT / 1000) + " seconds");
+      Serial.println("   Range: 5-3600 seconds");
+      Serial.println("   Status: " + String(pirSensor.timer_active ? "Active" : "Inactive"));
     }
     else if (configMode) {
       handleConfigInput(input);
@@ -423,6 +510,108 @@ void handleRebootCommand(const JsonDocument& doc) {
   }
 }
 
+// Function to handle timer configuration
+void handleTimerCommand(const JsonDocument& doc) {
+  if (doc["cmd"].is<int>() && doc["cmd"] == 200) { // Timer configuration command
+    if (doc["timer_value"].is<int>()) {
+      int newTimerSeconds = doc["timer_value"];
+      uint8_t sensor_id = doc["sensor_id"].is<int>() ? doc["sensor_id"] : pirSensor.sensor_id;
+      uint8_t port = doc["port"].is<int>() ? doc["port"] : pirSensor.port;
+      
+      // Validate timer value (5 seconds to 1 hour)
+      if (newTimerSeconds >= 5 && newTimerSeconds <= 3600) {
+        unsigned long newTimerMs = newTimerSeconds * 1000;
+        
+        // Update current sensor if it matches
+        if (sensor_id == pirSensor.sensor_id && port == pirSensor.port) {
+          pirSensor.sense_timeout = newTimerMs;
+          SENSE_TIMEOUT = newTimerMs; // Update global timer too
+        }
+        
+        // Save to EEPROM
+        saveSensorTimer(sensor_id, port, newTimerMs);
+        
+        Serial.println("✅ Sensor timer updated - ID:" + String(sensor_id) + " Port:" + String(port) + " Timer:" + String(newTimerSeconds) + "s");
+        
+        // Send confirmation back to UI
+        JsonDocument response;
+        response["device_id"] = device_id;
+        response["ch_t"] = "TIMER";
+        response["ch_addr"] = "TIMER_CONFIG";
+        response["cmd"] = 201; // Timer response
+        response["sensor_id"] = sensor_id;
+        response["port"] = port;
+        response["timer_value"] = newTimerSeconds;
+        response["status"] = "success";
+        
+        String payload;
+        serializeJson(response, payload);
+        client.publish((String("MPS/global/UP/") + device_id + "/status").c_str(), payload.c_str());
+        Serial.println("📤 Sent timer confirmation: " + payload);
+      } else {
+        Serial.println("❌ Invalid timer value! Must be 5-3600 seconds");
+        
+        // Send error response
+        JsonDocument errorResponse;
+        errorResponse["device_id"] = device_id;
+        errorResponse["ch_t"] = "TIMER";
+        errorResponse["ch_addr"] = "TIMER_CONFIG";
+        errorResponse["cmd"] = 201;
+        errorResponse["sensor_id"] = sensor_id;
+        errorResponse["port"] = port;
+        errorResponse["timer_value"] = pirSensor.sense_timeout / 1000;
+        errorResponse["status"] = "error";
+        errorResponse["error"] = "Invalid timer value. Must be 5-3600 seconds";
+        
+        String payload;
+        serializeJson(errorResponse, payload);
+        client.publish((String("MPS/global/UP/") + device_id + "/status").c_str(), payload.c_str());
+      }
+    }
+  }
+  else if (doc["cmd"].is<int>() && doc["cmd"] == 202) { // Get current timer value
+    uint8_t sensor_id = doc["sensor_id"].is<int>() ? doc["sensor_id"] : pirSensor.sensor_id;
+    uint8_t port = doc["port"].is<int>() ? doc["port"] : pirSensor.port;
+    
+    unsigned long currentTimer = loadSensorTimer(sensor_id, port);
+    
+    JsonDocument response;
+    response["device_id"] = device_id;
+    response["ch_t"] = "TIMER";
+    response["ch_addr"] = "TIMER_STATUS";
+    response["cmd"] = 203; // Timer status response
+    response["sensor_id"] = sensor_id;
+    response["port"] = port;
+    response["timer_value"] = currentTimer / 1000;
+    response["status"] = "current";
+    
+    String payload;
+    serializeJson(response, payload);
+    client.publish((String("MPS/global/UP/") + device_id + "/status").c_str(), payload.c_str());
+    Serial.println("📤 Sent current timer value: " + payload);
+  }
+  else if (doc["cmd"].is<int>() && doc["cmd"] == 203) { // Get all sensors timer status
+    JsonDocument response;
+    response["device_id"] = device_id;
+    response["ch_t"] = "TIMER";
+    response["ch_addr"] = "ALL_SENSORS";
+    response["cmd"] = 204; // All sensors response
+    response["sensors"] = JsonArray();
+    
+    // Add current sensor info
+    JsonObject sensorInfo = response["sensors"].createNestedObject();
+    sensorInfo["sensor_id"] = pirSensor.sensor_id;
+    sensorInfo["port"] = pirSensor.port;
+    sensorInfo["timer_value"] = pirSensor.sense_timeout / 1000;
+    sensorInfo["active"] = pirSensor.timer_active;
+    
+    String payload;
+    serializeJson(response, payload);
+    client.publish((String("MPS/global/UP/") + device_id + "/status").c_str(), payload.c_str());
+    Serial.println("📤 Sent all sensors timer status: " + payload);
+  }
+}
+
 void sendDeviceDiscovery() {
   JsonDocument doc;
   doc["device_id"] = device_id;
@@ -470,17 +659,20 @@ void connectToMQTT() {
       String controlTopic = "MPS/global/" + device_id + "/control";
       String rebootTopic = "MPS/global/" + device_id + "/reboot";
       String sceneTopic = "MPS/global/" + device_id + "/scene";
+      String timerTopic = "MPS/global/" + device_id + "/timer";
       
       client.subscribe(configTopic.c_str());
       client.subscribe(controlTopic.c_str());
       client.subscribe(rebootTopic.c_str());
       client.subscribe(sceneTopic.c_str());
+      client.subscribe(timerTopic.c_str());
       
       Serial.println("📡 Subscribed to topics:");
       Serial.println("   - " + configTopic);
       Serial.println("   - " + controlTopic);
       Serial.println("   - " + rebootTopic);
       Serial.println("   - " + sceneTopic);
+      Serial.println("   - " + timerTopic);
       
       sendDeviceDiscovery();
         return;
@@ -630,7 +822,7 @@ void checkPIRMotion() {
         }
         
         // Check timer timeout - send no motion MQTT when timer expires
-        if (pirSensor.timer_active && (millis() - pirSensor.timer_start > SENSE_TIMEOUT)) {
+        if (pirSensor.timer_active && (millis() - pirSensor.timer_start > pirSensor.sense_timeout)) {
             Serial.println("⏰ Timer expired - sending no motion MQTT to turn OFF lights");
             Serial.println("   Timer was active for: " + String((millis() - pirSensor.timer_start) / 1000) + " seconds");
             sendPIRStatusUpdate("no_motion");
@@ -642,7 +834,7 @@ void checkPIRMotion() {
         // Debug timer status
         if (pirSensor.timer_active) {
             unsigned long elapsed = (millis() - pirSensor.timer_start) / 1000;
-            unsigned long remaining = (SENSE_TIMEOUT / 1000) - elapsed;
+            unsigned long remaining = (pirSensor.sense_timeout / 1000) - elapsed;
             if (elapsed % 5 == 0) { // Print every 5 seconds
                 Serial.println("⏱️ Timer status: " + String(elapsed) + "s elapsed, " + String(remaining) + "s remaining");
             }
@@ -874,6 +1066,10 @@ void callback(char* topic, byte* payload, unsigned int length) {
     Serial.println("🔄 Received reboot command");
     handleRebootCommand(doc);
   }
+  else if (topicStr.endsWith("/timer")) {
+    Serial.println("⏰ Received timer configuration");
+    handleTimerCommand(doc);
+  }
 }
 
 void setup() {
@@ -887,6 +1083,12 @@ void setup() {
   
   initEEPROM();
   loadCredentials();
+  
+  // Load timer value from EEPROM
+  SENSE_TIMEOUT = loadTimerValue();
+  
+  // Load sensor-specific timer
+  pirSensor.sense_timeout = loadSensorTimer(pirSensor.sensor_id, pirSensor.port);
   
   showConfigMenu();
   configStartTime = millis();
