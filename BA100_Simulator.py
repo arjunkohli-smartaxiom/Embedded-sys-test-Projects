@@ -25,6 +25,11 @@ class ESP32Simulator:
         self.discovery_sent = False
         self.config_received = False
         
+        # Multi-sensor support
+        self.sensor_timers = {}  # Store timers for different sensors
+        self.current_sensor_id = 2  # Default sensor ID
+        self.current_port = 1      # Default port
+        
         # MQTT client setup
         self.client = mqtt.Client(client_id=self.device_id)
         self.client.username_pw_set("mps-bam100", "bam100")
@@ -38,6 +43,7 @@ class ESP32Simulator:
         self.control_topic = f"MPS/global/{self.device_id}/control"
         self.reboot_topic = f"MPS/global/{self.device_id}/reboot"
         self.scene_topic = f"MPS/global/{self.device_id}/scene"
+        self.timer_topic = f"MPS/global/{self.device_id}/timer"
         self.status_topic = f"MPS/global/UP/{self.device_id}/status"
         self.ping_topic = "MPS/global/sessionPing"
         
@@ -57,10 +63,12 @@ class ESP32Simulator:
             self.client.subscribe(self.control_topic)
             self.client.subscribe(self.reboot_topic)
             self.client.subscribe(self.scene_topic)
+            self.client.subscribe(self.timer_topic)
             print(f"📡 Subscribed to: {self.config_topic}")
             print(f"📡 Subscribed to: {self.control_topic}")
             print(f"📡 Subscribed to: {self.reboot_topic}")
             print(f"📡 Subscribed to: {self.scene_topic}")
+            print(f"📡 Subscribed to: {self.timer_topic}")
         else:
             print(f"❌ Failed to connect, return code {rc}")
     
@@ -85,6 +93,9 @@ class ESP32Simulator:
             elif topic.endswith("/reboot"):
                 print("🔄 Received reboot command")
                 self.handle_reboot_command(data)
+            elif topic.endswith("/timer"):
+                print("⏰ Received timer configuration")
+                self.handle_timer_command(data)
                 
         except json.JSONDecodeError:
             print("❌ Invalid JSON received")
@@ -234,6 +245,95 @@ class ESP32Simulator:
         if data.get("deviceId") == "reboot":
             print("🔄 Rebooting ESP32...")
             print("⚠️ Simulator will continue running (real ESP32 would restart)")
+    
+    def handle_timer_command(self, data):
+        """Handle timer configuration commands"""
+        cmd = data.get("cmd", 0)
+        
+        if cmd == 200:  # Set timer value
+            timer_value = data.get("timer_value", 0)
+            sensor_id = data.get("sensor_id", self.current_sensor_id)
+            port = data.get("port", self.current_port)
+            
+            if 5 <= timer_value <= 3600:
+                # Store timer for this sensor/port combination
+                sensor_key = f"{sensor_id}_{port}"
+                self.sensor_timers[sensor_key] = timer_value * 1000
+                
+                # Update current sensor if it matches
+                if sensor_id == self.current_sensor_id and port == self.current_port:
+                    self.sense_timeout = timer_value * 1000
+                
+                print(f"✅ Sensor timer updated - ID:{sensor_id} Port:{port} Timer:{timer_value}s")
+                
+                # Send confirmation
+                response = {
+                    "device_id": self.device_id,
+                    "ch_t": "TIMER",
+                    "ch_addr": "TIMER_CONFIG",
+                    "cmd": 201,
+                    "sensor_id": sensor_id,
+                    "port": port,
+                    "timer_value": timer_value,
+                    "status": "success"
+                }
+                self.client.publish(self.status_topic, json.dumps(response))
+                print(f"📤 Sent timer confirmation: {json.dumps(response)}")
+            else:
+                print(f"❌ Invalid timer value! Must be 5-3600 seconds")
+                
+                # Send error response
+                error_response = {
+                    "device_id": self.device_id,
+                    "ch_t": "TIMER",
+                    "ch_addr": "TIMER_CONFIG",
+                    "cmd": 201,
+                    "sensor_id": sensor_id,
+                    "port": port,
+                    "timer_value": self.sense_timeout / 1000,
+                    "status": "error",
+                    "error": "Invalid timer value. Must be 5-3600 seconds"
+                }
+                self.client.publish(self.status_topic, json.dumps(error_response))
+        
+        elif cmd == 202:  # Get current timer value
+            sensor_id = data.get("sensor_id", self.current_sensor_id)
+            port = data.get("port", self.current_port)
+            sensor_key = f"{sensor_id}_{port}"
+            
+            # Get timer for this sensor, or use default
+            timer_value = self.sensor_timers.get(sensor_key, self.sense_timeout) / 1000
+            
+            response = {
+                "device_id": self.device_id,
+                "ch_t": "TIMER",
+                "ch_addr": "TIMER_STATUS",
+                "cmd": 203,
+                "sensor_id": sensor_id,
+                "port": port,
+                "timer_value": timer_value,
+                "status": "current"
+            }
+            self.client.publish(self.status_topic, json.dumps(response))
+            print(f"📤 Sent current timer value: {json.dumps(response)}")
+        
+        elif cmd == 203:  # Get all sensors timer status
+            response = {
+                "device_id": self.device_id,
+                "ch_t": "TIMER",
+                "ch_addr": "ALL_SENSORS",
+                "cmd": 204,
+                "sensors": [
+                    {
+                        "sensor_id": self.current_sensor_id,
+                        "port": self.current_port,
+                        "timer_value": self.sense_timeout / 1000,
+                        "active": self.timer_active
+                    }
+                ]
+            }
+            self.client.publish(self.status_topic, json.dumps(response))
+            print(f"📤 Sent all sensors timer status: {json.dumps(response)}")
     
     def send_ping(self):
         """Send ping message (like ESP32)"""
@@ -418,6 +518,7 @@ class ESP32Simulator:
         print("  'nomotion' or 'n' - Simulate no motion")
         print("  'status' or 's' - Show current status")
         print("  'timer X' - Set timer to X seconds")
+        print("  'timerstatus' - Show current timer value")
         print("  'quit' or 'q' - Exit")
         print("=" * 50)
         
@@ -445,6 +546,10 @@ class ESP32Simulator:
                             print("❌ Timer must be between 5-3600 seconds")
                     except:
                         print("❌ Invalid timer value")
+                elif command == 'timerstatus':
+                    print(f"⏰ Current Timer: {self.sense_timeout / 1000} seconds")
+                    print(f"   Range: 5-3600 seconds")
+                    print(f"   Status: {'Active' if self.timer_active else 'Inactive'}")
                 elif command in ['quit', 'q']:
                     break
                 else:
